@@ -101,6 +101,12 @@ export const Route = createFileRoute("/api/integration/v1/deliveries")({
         }
         const body = input as DeliveryPayload;
 
+        if (body.external_order_id != null && typeof body.external_order_id !== "string") {
+          return json({ error: "external_order_id_invalid" }, 400);
+        }
+        if (body.source != null && typeof body.source !== "string") {
+          return json({ error: "unsupported_source" }, 400);
+        }
         const externalOrderId = body.external_order_id?.trim();
         const source = body.source?.trim() || "pixel-palace";
 
