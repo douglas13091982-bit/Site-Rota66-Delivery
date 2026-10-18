@@ -57,10 +57,6 @@ function normalizeLogisticsStatus(status: string) {
   }
 }
 
-function validUuid(value: unknown) {
-  return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
-}
-
 function validText(value: unknown, maxLength: number) {
   return typeof value === "string" && value.trim().length > 0 && value.trim().length <= maxLength;
 }
@@ -188,7 +184,7 @@ export const Route = createFileRoute("/api/integration/v1/deliveries")({
             cliente_nome: body.cliente_nome!.trim(),
             cliente_telefone: body.cliente_telefone!.trim(),
             endereco_coleta: body.endereco_coleta!.trim(),
-            endereco_coleta_lat: body.endereco_coleta ?? null ? body.endereco_coleta_lat ?? null : null,
+            endereco_coleta_lat: body.endereco_coleta_lat ?? null,
             endereco_coleta_lng: body.endereco_coleta_lng ?? null,
             endereco_entrega: body.endereco_entrega!.trim(),
             endereco_entrega_lat: body.endereco_entrega_lat ?? null,
