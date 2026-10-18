@@ -94,13 +94,14 @@ export const Route = createFileRoute("/api/integration/v1/deliveries/$id")({
 
         const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
 
-        const { data: mapping } = await supabaseAdmin
+        const { data: mapping, error: mappingError } = await supabaseAdmin
           .from("integracao_entregas" as any)
           .select("pedido_id")
           .eq("source", "pixel-palace")
           .eq("external_order_id", params.id)
           .maybeSingle();
 
+        if (mappingError) return json({ error: "integration_lookup_failed" }, 500);
         const pedidoId = (mapping as Pick<IntegrationMapping, "pedido_id"> | null)?.pedido_id ?? params.id;
 
         const { data, error } = await supabaseAdmin
