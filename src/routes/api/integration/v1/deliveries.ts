@@ -57,8 +57,22 @@ function normalizeLogisticsStatus(status: string) {
   }
 }
 
-function validUuid(value: unknown) {
-  return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+function validText(value: unknown, maxLength: number) {
+  return typeof value === "string" && value.trim().length > 0 && value.trim().length <= maxLength;
+}
+
+function validOptionalText(value: unknown, maxLength: number) {
+  return value == null || (typeof value === "string" && value.length <= maxLength);
+}
+
+function validAmount(value: unknown) {
+  return value == null || (typeof value === "number" && Number.isFinite(value) && value >= 0);
+}
+
+function validCoordinates(lat: unknown, lng: unknown) {
+  if (lat == null && lng == null) return true;
+  return typeof lat === "number" && Number.isFinite(lat) && lat >= -90 && lat <= 90
+    && typeof lng === "number" && Number.isFinite(lng) && lng >= -180 && lng <= 180;
 }
 
 function code() {
@@ -76,13 +90,23 @@ export const Route = createFileRoute("/api/integration/v1/deliveries")({
       POST: async ({ request }) => {
         if (!authorized(request)) return json({ error: "unauthorized" }, 401);
 
-        let body: DeliveryPayload;
+        let input: unknown;
         try {
-          body = await request.json();
+          input = await request.json();
         } catch {
           return json({ error: "invalid_json" }, 400);
         }
+        if (!input || typeof input !== "object" || Array.isArray(input)) {
+          return json({ error: "invalid_payload" }, 400);
+        }
+        const body = input as DeliveryPayload;
 
+        if (body.external_order_id != null && typeof body.external_order_id !== "string") {
+          return json({ error: "external_order_id_invalid" }, 400);
+        }
+        if (body.source != null && typeof body.source !== "string") {
+          return json({ error: "unsupported_source" }, 400);
+        }
         const externalOrderId = body.external_order_id?.trim();
         const source = body.source?.trim() || "pixel-palace";
 
@@ -92,34 +116,60 @@ export const Route = createFileRoute("/api/integration/v1/deliveries")({
         if (source !== "pixel-palace") {
           return json({ error: "unsupported_source" }, 400);
         }
-        if (!body.cliente_nome?.trim() || !body.cliente_telefone?.trim()) {
-          return json({ error: "cliente_required" }, 400);
+        if (!validText(body.cliente_nome, 160) || !validText(body.cliente_telefone, 40)) {
+          return json({ error: "cliente_required_or_invalid" }, 400);
         }
-        if (!body.endereco_coleta?.trim() || !body.endereco_entrega?.trim()) {
-          return json({ error: "addresses_required" }, 400);
+        if (!validText(body.endereco_coleta, 500) || !validText(body.endereco_entrega, 500)) {
+          return json({ error: "addresses_required_or_invalid" }, 400);
         }
-
-        const taxa = Number(body.taxa_entrega ?? 0);
-        if (!Number.isFinite(taxa) || taxa < 0) {
+        if (!validOptionalText(body.cidade, 120)
+          || !validOptionalText(body.complemento, 250)
+          || !validOptionalText(body.codigo_entrega, 32)
+          || !validOptionalText(body.observacoes, 2000)) {
+          return json({ error: "optional_text_invalid" }, 400);
+        }
+        if (!validAmount(body.taxa_entrega)) {
           return json({ error: "taxa_entrega_invalid" }, 400);
         }
+        if (!validAmount(body.bonus_entregador)) {
+          return json({ error: "bonus_entregador_invalid" }, 400);
+        }
+        if (!validAmount(body.valor_total)) {
+          return json({ error: "valor_total_invalid" }, 400);
+        }
+        if (!validCoordinates(body.endereco_coleta_lat, body.endereco_coleta_lng)
+          || !validCoordinates(body.endereco_entrega_lat, body.endereco_entrega_lng)) {
+          return json({ error: "coordinates_invalid" }, 400);
+        }
 
+        const taxa = body.taxa_entrega ?? 0;
+        const bonus = body.bonus_entregador ?? 0;
+        const valorTotal = body.valor_total ?? 0;
         const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
 
-        const { data: existing } = await supabaseAdmin
+        const { data: existing, error: existingError } = await supabaseAdmin
           .from("integracao_entregas" as any)
           .select("pedido_id, source, external_order_id")
           .eq("source", source)
           .eq("external_order_id", externalOrderId)
           .maybeSingle();
 
+        if (existingError) {
+          console.error("[pixel-palace-integration] existing mapping lookup", existingError);
+          return json({ error: "integration_lookup_failed" }, 500);
+        }
+
         const existingMapping = existing as IntegrationMapping | null;
         if (existingMapping?.pedido_id) {
-          const { data: pedido } = await supabaseAdmin
+          const { data: pedido, error: pedidoLookupError } = await supabaseAdmin
             .from("pedidos")
             .select("id,status,entregador_id,taxa_entrega,codigo_entrega")
             .eq("id", existingMapping.pedido_id)
             .maybeSingle();
+          if (pedidoLookupError) {
+            console.error("[pixel-palace-integration] existing delivery lookup", pedidoLookupError);
+            return json({ error: "delivery_lookup_failed" }, 500);
+          }
           return json({
             ok: true,
             idempotent: true,
@@ -137,25 +187,25 @@ export const Route = createFileRoute("/api/integration/v1/deliveries")({
           .from("pedidos")
           .insert({
             loja_id: null,
-            cliente_nome: body.cliente_nome.trim(),
-            cliente_telefone: body.cliente_telefone.trim(),
-            endereco_coleta: body.endereco_coleta.trim(),
+            cliente_nome: body.cliente_nome!.trim(),
+            cliente_telefone: body.cliente_telefone!.trim(),
+            endereco_coleta: body.endereco_coleta!.trim(),
             endereco_coleta_lat: body.endereco_coleta_lat ?? null,
             endereco_coleta_lng: body.endereco_coleta_lng ?? null,
-            endereco_entrega: body.endereco_entrega.trim(),
+            endereco_entrega: body.endereco_entrega!.trim(),
             endereco_entrega_lat: body.endereco_entrega_lat ?? null,
             endereco_entrega_lng: body.endereco_entrega_lng ?? null,
-            cidade: body.cidade ?? null,
-            complemento: body.complemento ?? null,
-            observacoes: body.observacoes ?? null,
+            cidade: body.cidade?.trim() || null,
+            complemento: body.complemento?.trim() || null,
+            observacoes: body.observacoes?.trim() || null,
             taxa_entrega: taxa,
-            bonus_entregador: Number(body.bonus_entregador ?? 0) || 0,
+            bonus_entregador: bonus,
             codigo_entrega: codigoEntrega,
             status: "pronto",
             origem: "pixel-palace",
             tipo_entrega: "plataforma",
             entrega_paga: false,
-            valor_total: Number(body.valor_total ?? 0) || 0,
+            valor_total: valorTotal,
             valor_produtos: 0,
             itens: [],
           })
@@ -177,7 +227,7 @@ export const Route = createFileRoute("/api/integration/v1/deliveries")({
 
         if (mappingError) {
           // Corrida de idempotência: outra requisição criou o vínculo primeiro.
-          const { data: winner } = await supabaseAdmin
+          const { data: winner, error: winnerError } = await supabaseAdmin
             .from("integracao_entregas" as any)
             .select("pedido_id")
             .eq("source", source)
@@ -185,7 +235,7 @@ export const Route = createFileRoute("/api/integration/v1/deliveries")({
             .maybeSingle();
 
           const winningMapping = winner as Pick<IntegrationMapping, "pedido_id"> | null;
-          if (winningMapping?.pedido_id) {
+          if (!winnerError && winningMapping?.pedido_id) {
             await supabaseAdmin.from("pedidos").delete().eq("id", pedido.id);
             return json({
               ok: true,
